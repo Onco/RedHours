@@ -18,7 +18,8 @@ from datetime import timedelta
 import time
 import caldav
 from caldav.elements import dav, cdav
-from workdays import networkdays
+import vobject
+from networkdays import networkdays
 import holidays
 
 # GUI
@@ -50,7 +51,6 @@ settings_icon = b'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAC3XpUWHRSYXcgcH
 dateFormat='%d.%m.%Y'
 cz_month_names=('Leden', 'Únor', 'Březen', 'Duben', 'Květen', 'Červen', 'Červenec', 'Srpen', 'Září', 'Říjen', 'Listopad', 'Prosinec')
 cz_day_abbrevs=('Ne', 'Po', 'Út', 'St', 'Čt', 'Pá', 'So')
-cz_holidays = list(holidays.CZ(years=[date.today().year]).keys())
 
 # user_id = [keyword, keyword, ...]
 user_to_vacation_keywords = {}
@@ -70,9 +70,9 @@ def sensitive():
     
     data = {}
     try:
-        with open(sensitivePath, 'r') as sensitive:
+        with open(sensitivePath, 'r', encoding='utf8') as sensitive:
             if sensitive:
-                data = json.load(sensitive, encoding="iso-8859-2")
+                data = json.load(sensitive)
                 if not 'redmineUrl' in data or len(data['redmineUrl']) == 0:
                     raise Exception("No redmineUrl in sensitive.json")
                 else:
@@ -254,14 +254,29 @@ def _vacDaysQuery_thread(*args):
     if dovolene:
         if mutex.acquire(False):
             try:
-                results = dovolene.date_search(start=date(*(time.strptime(args[0][0], dateFormat)[0:3])), end=date(*(time.strptime(args[0][1], dateFormat)[0:3])))
+                dateFrom = date(*(time.strptime(args[0][0], dateFormat)[0:3]))
+                dateTo = date(*(time.strptime(args[0][1], dateFormat)[0:3]))
+                results = dovolene.date_search(start=dateFrom, end=dateTo)
+                svatky = list(holidays.CZ(years=[dateFrom.year, dateTo.year]).keys())
                 for e in results:
+                    duration = 0.0
+                    try:
+                        startDate = e.vobject_instance.vevent.dtstart.value
+                        endDate = e.vobject_instance.vevent.dtend.value
+                        for i in range(0, (e.vobject_instance.vevent.dtend.value - e.vobject_instance.vevent.dtstart.value).days):
+                            currentDate = startDate + timedelta(days=i)
+                            if (currentDate.weekday() < 5) and currentDate not in svatky:
+                                duration += 1.0
+                        #duration = float((e.vobject_instance.vevent.dtend.value - e.vobject_instance.vevent.dtstart.value).days)
+                    except:
+                        duration = 1.0
+                    summary = e.vobject_instance.vevent.summary.value
                     for i in user_to_vacation_keywords[str(args[0][2])]:
-                        if i in e.data:
-                            if any(i in e.data for i in ["1/2", "0.5", "0,5", "pul", "půl", "pol"]):
+                        if i in summary:
+                            if any(i in e.data for i in ["1/2", "0.5", "0,5", "pul", "půl", "pol", "pól"]):
                                 thread_data.result += 0.5 
                             else:
-                                thread_data.result += 1.0
+                                thread_data.result += duration
                     
                 print("vacDaysNext: Success")
             except:
@@ -527,16 +542,17 @@ def main():
                [sg.Text('Vyber projekty:')],
                [sg.Listbox(values=projectNames, size=(43, 6), select_mode=sg.LISTBOX_SELECT_MODE_MULTIPLE, key="-PROJECTS-", enable_events=True)],
                [sg.Button('<< Předešlý', key='-PrevMonth-', size=(10, 1)), sg.Button('Tenhle měsíc', key='-ThisMonth-', size=(15, 1)), sg.Button('Příští >>', key='-NextMonth-', size=(10, 1))],
-               [sg.Text('Od:'), sg.In(key='-From-', default_text=currentMonthStart.strftime(dateFormat), size=(10, 1), enable_events=True), sg.CalendarButton('', default_date_m_d_y=FoM, target='-From-', image_data=calendar_icon, button_color=sg.TRANSPARENT_BUTTON, image_size=(32, 32), border_width=0, format=dateFormat, title='Od data:', no_titlebar=False, locale='cs', begin_at_sunday_plus=1, day_abbreviations=cz_day_abbrevs, month_names=cz_month_names), sg.Text('Do:'), sg.In(key='-To-', default_text=currentMonthEnd.strftime(dateFormat), size=(10, 1), enable_events=True), sg.CalendarButton('', default_date_m_d_y=LoM, target='-To-', image_data=calendar_icon, button_color=sg.TRANSPARENT_BUTTON, image_size=(32, 32), border_width=0, format=dateFormat, title='Do data:', no_titlebar=False, locale='cs', begin_at_sunday_plus=1, day_abbreviations=cz_day_abbrevs, month_names=cz_month_names), sg.Button(image_data=settings_icon, tooltip='Nastavení', key='-Settings-')],
+               [sg.Text('Od:'), sg.In(key='-From-', default_text=currentMonthStart.strftime(dateFormat), size=(9, 1), enable_events=True), sg.CalendarButton('', default_date_m_d_y=FoM, target='-From-', image_data=calendar_icon, button_color=sg.TRANSPARENT_BUTTON, image_size=(32, 32), border_width=0, format=dateFormat, title='Od data:', no_titlebar=False, locale='cs', begin_at_sunday_plus=1, day_abbreviations=cz_day_abbrevs, month_names=cz_month_names), sg.Text('Do:'), sg.In(key='-To-', default_text=currentMonthEnd.strftime(dateFormat), size=(9, 1), enable_events=True), sg.CalendarButton('', default_date_m_d_y=LoM, target='-To-', image_data=calendar_icon, button_color=sg.TRANSPARENT_BUTTON, image_size=(32, 32), border_width=0, format=dateFormat, title='Do data:', no_titlebar=False, locale='cs', begin_at_sunday_plus=1, day_abbreviations=cz_day_abbrevs, month_names=cz_month_names), sg.Button(image_data=settings_icon, tooltip='Nastavení', key='-Settings-')],
                [sg.Text('Zalogované hodiny: ', size=(15,1)), sg.In(key='-Hours-', default_text="0.0", size=(25, 1))],
-               [sg.Text('Plánované hodiny: ', size=(15,1)), sg.In(key='-ExpectedHours-', default_text="0.0", size=(25, 1))]
+               [sg.Text('Plánované hodiny: ', size=(15,1)), sg.In(key='-ExpectedHours-', default_text="0.0", size=(25, 1))],
+               [sg.Text('Čerpaná dovolená (h): ', size=(15,1)), sg.In(key='-VacHours-', default_text="0.0", size=(25, 1))]
              ]
     window = sg.Window('RedHours', layout, icon=app_icon)
     
-    settings_layout = [
-                         [sg.Text('Týdenní hodinový fond:'), sg.In(key='-HourBudget-', default_text='40')],
-                         []
-                      ]
+    #settings_layout = [
+    #                     [sg.Text('Týdenní hodinový fond:'), sg.In(key='-HourBudget-', default_text='40')],
+    #                     [sg.Button('')]
+    #                  ]
 
     correctFrom = True
     correctTo = True
@@ -547,27 +563,43 @@ def main():
     popLocTup = (None, None)
     # start event loop
     while True:
+        window.finalize()
+        popLocTup = (window.CurrentLocation()[0] + window.Size[0] / 2 - 100, window.CurrentLocation()[1] + window.Size[1] / 2 - 75)
         if correctFrom and correctTo:
-            window.finalize()
-            popLocTup = (window.CurrentLocation()[0] + window.Size[0] / 2 - 100, window.CurrentLocation()[1] + window.Size[1] / 2 - 75)
-            
             if len(values['-PROJECTS-']) > 0:
                 window.disable()
-                sumHours = performProlongedCall(_filterTimeEntry_thread, [values['-PROJECTS-'], projects, values['-From-'], values['-To-'], userId], "Doluji v Redmine...", popLocTup)
+                sumHours = performProlongedCall(_filterTimeEntry_thread, [values['-PROJECTS-'], projects, values['-From-'], values['-To-'], userId], "Těžím v Rudém Dole...", popLocTup)
                 window.enable()
+                window.BringToFront()
                 window['-Hours-'].update(sumHours)
             else:
                 window['-Hours-'].update(0.0)
             
             window.disable()
-            vacDays = performProlongedCall(_vacDaysQuery_thread, [values['-From-'], values['-To-'], userId], "Koukám do obláčku...", popLocTup)
+            vacDays = performProlongedCall(_vacDaysQuery_thread, [values['-From-'], values['-To-'], userId], "Koukám do Obláčku...", popLocTup)
+            
+            #print("VacDays=" + str(vacDays))
             window.enable()
-                            
-            window['-ExpectedHours-'].update(8.0 * (networkdays(start_date=date(*(time.strptime(values['-From-'], dateFormat)[0:3])),end_date=date(*(time.strptime(values['-To-'], dateFormat)[0:3])), holidays=cz_holidays) - vacDays))
+            window.BringToFront()
+            
+            #print("Workdays=" + str(networkdays(start_date=date(*(time.strptime(values['-From-'], dateFormat)[0:3])),end_date=date(*(time.strptime(values['-To-'], dateFormat)[0:3])), holidays=cz_holidays)))
+            dateFrom = date(*(time.strptime(values['-From-'], dateFormat)[0:3]))
+            dateTo = date(*(time.strptime(values['-To-'], dateFormat)[0:3]))
+            netDays = networkdays.Networkdays(dateFrom, dateTo, list(holidays.CZ(years=[dateFrom.year, dateTo.year]).keys()))
+            #print("Holidays")
+            #print(netDays.holidays())
+            #print("Workdays=")
+            #print(netDays.networkdays())
+            workDays = len(netDays.networkdays())
+            #print("Workdays=" + str(workDays))
+            window['-ExpectedHours-'].update(8.0 * (workDays - vacDays))
+            window['-VacHours-'].update(8.0 * vacDays)
         else:
             window['-Hours-'].update(0.0)
             window['-ExpectedHours-'].update(0.0)
+            window['-VacHours-'].update(0.0)
         
+        window.BringToFront()
         event, values = window.read()
         
         if event in (sg.WIN_CLOSED, 'Zrušit'):
@@ -635,12 +667,31 @@ def main():
             values['-From-'] = thisMonthStart.strftime(dateFormat)
             values['-To-'] = thisMonthEnd.strftime(dateFormat)
         if event == '-Settings-':
-            
+            layoutSettings = [
+                        [sg.Image(data=settings_icon), sg.Text('Nastavení:')],
+                        [sg.Text('Tydenní hodinový fond:', size=(10, 1)), sg.In(size=(15, 1), default_text='40.0')],
+                        [sg.Button('Ok', bind_return_key=True), sg.Button('Zrušit')]
+                     ]
+            windowSettings = sg.Window('Nastavení', layoutSettings, icon=app_icon, location=popLocTup)
+            while True:
+                windowSettings.finalize()
+                eventSettings, valuesSettings = windowSettings.read()
+                if eventSettings == 'Ok':
+                    print('Fond: ' + valuesSettings[1])
+                    windowSettings.close()
+                    break
+                elif eventSettings in ('Zrušit', sg.WIN_CLOSED):
+                    windowSettings.close()
+                    break
 
     # GUI improvements:
     # - list of Redmine logs?
     # - calendar - display vacations, state holidays, personal, etc. in a nice calendar-like form
     # - checkbox(es) to include/exclude personal nextcloud events
+    # - text box for meeting event hours
+    # - better animation handling
+    # - bad settings menu
+    # - update from Redmine only after changes made
 
 #-----------------------------------------------------------------------
 if __name__ == "__main__":
